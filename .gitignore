@@ -1,0 +1,12 @@
+node_modules
+.vscode
+.idea
+.hotreload
+data.json
+main.js
+main.js.LICENSE.txt
+release
+deploy.bat
+
+
+

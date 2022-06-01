@@ -1,0 +1,10 @@
+{
+	"id": "obsidian-float-toc",
+	"name": "Float Toc",
+	"version": "0.1.0",
+	"minAppVersion": "0.12.0",
+	"description": "show float toc for every file",
+	"author": "chenghongyao",
+	"authorUrl": "https://github.com/chenghongyao",
+	"isDesktopOnly": false
+}
