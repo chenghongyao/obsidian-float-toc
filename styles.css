@@ -53,6 +53,15 @@
     background-color: #5B6A81;
 }
 
+/* .toc-heading-title-content::before,
+.toc-folder-title-content::before {
+    content: '';
+    display: inline-block;
+    width: 5px; 
+    height: 5px;
+    background-color: red;
+    border-radius: 50%;
+} */
 
 /* minimize */
 .toc-view-container.minimize {

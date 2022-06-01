@@ -1,4 +1,4 @@
-import {Plugin,MarkdownView, TFile, Modal, App, Notice, WorkspaceLeaf, ViewState, View, HeadingCache} from "obsidian";
+import {Plugin,MarkdownView, TFile, Modal, App, Notice, WorkspaceLeaf, ViewState, View, HeadingCache, Setting, PluginSettingTab} from "obsidian";
 
 import Vue from "Vue";
 import vHeadingTree from "./components/v-heading-tree.vue"
@@ -33,21 +33,21 @@ class HeadingTree {
 
 }
 
-function buildHeadingTree(headings: Array<HeadingCache>, start: number, tree: HeadingTree, firstLevel: boolean) {
+function buildHeadingTree(headings: Array<HeadingCache>, start: number, tree: HeadingTree, firstLevel: boolean, levelOff: number) {
 	var currentLevel = 0;
 	var i = start;
 	for (; i < headings.length; i++) {
 		const h = headings[i];
 		if (currentLevel === 0 || currentLevel === h.level) {
-			const res = new HeadingTree(h.level,h.position.start.line,h.heading);
+			const res = new HeadingTree(h.level - levelOff,h.position.start.line,h.heading);
 			tree.push(res);
 			currentLevel = h.level
 		}
 		else if (currentLevel < h.level) {
-			const lastIndex = buildHeadingTree(headings,i,tree.last(),false);
+			const lastIndex = buildHeadingTree(headings,i,tree.last(),false, levelOff);
 			i = lastIndex;
 		} else if (firstLevel){ //currentLevel > h.level
-			const res = new HeadingTree(h.level,h.position.start.line,h.heading);
+			const res = new HeadingTree(h.level  - levelOff ,h.position.start.line,h.heading);
 			tree.push(res);
 			currentLevel = h.level
 		} else {
@@ -63,30 +63,26 @@ class TocView {
 	file: TFile;
 	container: HTMLElement;
 	headingTree: HeadingTree;
-	app: App;
+	plugin: FloatTocPlugin;
+	display: boolean;
 
-	constructor(app: App, view: MarkdownView,file: TFile) {
-		this.app = app;
+	constructor(plugin: FloatTocPlugin, view: MarkdownView,file: TFile) {
+		this.plugin = plugin
 		this.file = file;
 		this.view = view;
+		this.display = true;
 
-
-		const headings = this.app.metadataCache.getFileCache(file).headings || [];
-		
 		this.headingTree = new HeadingTree(0,0,"root");
-		buildHeadingTree(headings,0,this.headingTree,true);
-
-		
+		this.createTocTree();
 	}
 
-	private createTocContainer() {
-		this.container = this.view.contentEl.createDiv("markdown-toc-view");
+	private createTocTree() {
+		
+		this.container = document.createElement("div");
+		this.container.addClass("markdown-toc-view");
 		this.container.setAttr("data-file",this.file.path);
-	}
 
 
-	private mountTocTree() {
-		
 		const self = this;
 		new Vue({
 			el: this.container.createDiv(),
@@ -96,8 +92,11 @@ class TocView {
 				},
 				on: {
 					'select-heading': function(node: HeadingTree) {
-						console.log("select",node);
 						self.view.setEphemeralState({ line:node.line })
+					},
+					'close': function() {
+						self.plugin.fileTocMap.delete(self.file);
+						self.unmount();
 					}
 				},
 				ref: "tree",
@@ -109,14 +108,17 @@ class TocView {
 	}
 
 	updateTree() {
-		const headings = this.app.metadataCache.getFileCache(this.file).headings;
+		const headings = this.plugin.app.metadataCache.getFileCache(this.file).headings || [];
+
+		var minLevel = 999;
+		headings.map((h) => {minLevel = h.level < minLevel ? h.level : minLevel});
+
 		this.headingTree.clear();
-		buildHeadingTree(headings,0,this.headingTree,true);
+		buildHeadingTree(headings,0,this.headingTree,true, minLevel === 999 ? 0 : minLevel - 1);
 	}
 
 	mount() {
-		this.createTocContainer();
-		this.mountTocTree();
+		this.view.contentEl.appendChild(this.container);
 	}
 
 	unmount() {
@@ -128,44 +130,66 @@ class TocView {
 
 }
 
+interface FloatTocSetting {
+	excludePaths: Array<string>
+}
 
+const DEFAULT_SETTINGS: FloatTocSetting = {
+	excludePaths: []
+}
+export default class FloatTocPlugin extends Plugin {
 
-export default class QuickTagsPlugin extends Plugin {
-
-	fileTocMap: Map<TFile,any> = new Map();
+	fileTocMap: Map<TFile,TocView> = new Map();
+	settings: FloatTocSetting;
 
 	async onload() {
+		await this.loadSettings();
+		this.addSettingTab(new FloatTocSettingTab(this.app, this));
 
 		const eventRefFileOpen = this.app.workspace.on('file-open', (file) => {
 			if (!file) return;
 
+			// is markdown view ??
 			const view = this.app.workspace.activeLeaf.view;
 			if (!(view instanceof MarkdownView)) return;
 
-			const oldTocView = view.contentEl.getElementsByClassName("markdown-toc-view")?.[0]
-			const oldFilePath = oldTocView?.getAttr("data-file");
+			// old toc ??
+			const oldTocViewEl = view.contentEl.getElementsByClassName("markdown-toc-view")?.[0]
+			const oldFilePath = oldTocViewEl?.getAttr("data-file");
+			if (oldFilePath === file.path) return;  // not new file
 
-			if (oldFilePath !== file.path) {
-
-				// remove old toc
-				if (oldFilePath) {
-					const oldFile = this.app.vault.getAbstractFileByPath(oldFilePath) as TFile;
-					this.fileTocMap.delete(oldFile);
-					view.contentEl.removeChild(oldTocView);
-				}
-
-				const tocView = new TocView(this.app,view,file);
-				tocView.mount();
-				this.fileTocMap.set(file,tocView);
+			// remove old toc element
+			if (oldFilePath) { // close file
+				const oldFile = this.app.vault.getAbstractFileByPath(oldFilePath) as TFile;
+				const oldToc = this.fileTocMap.get(oldFile);
+				oldToc.unmount();
+				this.fileTocMap.delete(oldFile);
 			}
 
+			// create new one
+			// dont display
+			if (this.app.metadataCache.getFileCache(file)?.frontmatter?.["float-toc"] === false) return;
+			for (var i = 0; i < this.settings.excludePaths.length; i++) {
+				if (file.path.startsWith(this.settings.excludePaths[i])) return;
+			}
+		
+			const tocView = new TocView(this,view,file);
+			this.fileTocMap.set(file,tocView);
+
+			tocView.updateTree();
+			tocView.mount();
+			
 		});
 
 		const eventRefCacheChanged = this.app.metadataCache.on("changed",(file, data,cache) => {
 			const tocView = this.fileTocMap.get(file);
 			if (!tocView) return;
 
-			tocView.updateTree();
+			if (cache?.frontmatter?.["float-toc"] === false) {
+				tocView.unmount();
+			} else {
+				tocView.updateTree();
+			}
 		})
 
 		this.register(() => {
@@ -179,4 +203,44 @@ export default class QuickTagsPlugin extends Plugin {
 		// 	v.unmount();
 		// });
 	}
+
+
+	private async loadSettings() {
+		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+	
+	}
+
+	async saveSettings() {
+		await this.saveData(this.settings);
+	}
+}
+
+
+class FloatTocSettingTab extends PluginSettingTab {
+	plugin: FloatTocPlugin;
+
+	constructor(app: App, plugin: FloatTocPlugin) {
+		super(app, plugin);
+		this.plugin = plugin;
+	}
+
+
+	display(): void {
+		const { containerEl } = this;
+		containerEl.empty();
+		containerEl.createEl("h2", { text: "Float TOC" });
+
+		new Setting(containerEl)
+			.setName("排除路径")
+			.setDesc("一行一个")
+			.addTextArea((text) => {
+				text.setValue(this.plugin.settings.excludePaths.join("\r\n")).onChange((value) => {
+					this.plugin.settings.excludePaths = value.split("\n").map((t) => t.trim())
+					this.plugin.saveSettings();
+				})
+			})
+
+
+	}
+
 }
