@@ -65,13 +65,11 @@ class TocView {
 	container: HTMLElement;
 	headingTree: HeadingTree;
 	plugin: FloatTocPlugin;
-	display: boolean;
 
 	constructor(plugin: FloatTocPlugin, view: MarkdownView,file: TFile) {
 		this.plugin = plugin
 		this.file = file;
 		this.view = view;
-		this.display = true;
 
 		this.headingTree = new HeadingTree(0,0,"root");
 		this.createTocTree();
@@ -144,28 +142,54 @@ class TocView {
 		this.view.contentEl.appendChild(this.container);
 	}
 
+	mounted(): boolean {
+		return Boolean(this.container);
+	}
 	unmount() {
 		if (this.container) {
 			this.view.contentEl.removeChild(this.container);
+			this.container = null;
 		}
 	}
 
 
 }
 
-interface FloatTocSetting {
-	excludePaths: Array<string>
-}
 
-const DEFAULT_SETTINGS: FloatTocSetting = {
-	excludePaths: []
-}
 export default class FloatTocPlugin extends Plugin {
 
-	fileTocMap: Map<TFile,TocView> = new Map();
-	viewFileMap: Map<View,TFile> = new Map();
+	fileTocMap: Map<TFile,Array<TocView>> = new Map();
+	viewTocMap: Map<MarkdownView,TocView> = new Map();
 
 	settings: FloatTocSetting;
+
+	private addNewTocViewToMarkdownView(view: MarkdownView, file: TFile) {
+		const tocView = new TocView(this,view,file);
+		tocView.updateTree();
+		tocView.mount();
+
+		var tocViews = this.fileTocMap.get(file)
+		if (!tocViews) {
+			tocViews = new Array<TocView>()
+			this.fileTocMap.set(file,tocViews);
+		}
+
+		tocViews.push(tocView);
+		this.viewTocMap.set(view,tocView);
+	}
+
+	private removeTocViewOfMarkdownView(view: MarkdownView) {
+		const tocView = this.viewTocMap.get(view);
+		if (tocView) {
+			tocView.unmount();
+			const tocViews = this.fileTocMap.get(tocView.file);
+			tocViews.remove(tocView);
+			if (tocViews.length === 0) {
+				this.fileTocMap.delete(tocView.file);
+			}
+			this.viewTocMap.delete(view);
+		}
+	}
 
 	async onload() {
 		await this.loadSettings();
@@ -181,26 +205,17 @@ export default class FloatTocPlugin extends Plugin {
 				return function() {
 					const oldView = this.view;
 					if (oldView instanceof MarkdownView) { // old markdown file is close!!
-						const oldFile = self.viewFileMap.get(oldView);
-						if (oldFile) {
-							self.fileTocMap.delete(oldFile);
-							self.viewFileMap.delete(oldView);
-							// console.log("file-close",oldFile.path);
-						}
+						self.removeTocViewOfMarkdownView(oldView);
 					}
 					return next.apply(this);
 				}
 			},
 			setViewState(next) {
-				return function (state: ViewState, ...rest: unknown[]) {					
+				return function (state: ViewState, ...rest: unknown[]) {
 					const oldView = this.view;
 					if (oldView instanceof MarkdownView && state.type !== "markdown") { // old markdown file is close!!
-						const oldFile = self.viewFileMap.get(oldView);				// if state.type !== "markdown" then file is changed
-						if (oldFile) {
-							self.fileTocMap.delete(oldFile);
-							self.viewFileMap.delete(oldView);
-							// console.log("file-close",oldFile.path);
-						}
+																						// if state.type === "markdown" then file is changed
+						self.removeTocViewOfMarkdownView(oldView);
 					}	
 
 					return next.apply(this, [state, ...rest]);
@@ -211,25 +226,19 @@ export default class FloatTocPlugin extends Plugin {
 
 		
 		const eventRefFileOpen = this.app.workspace.on('file-open', (file) => {
-			if (!file) return;
+			if (!file) return; 
+			
 
 			const view = this.app.workspace.activeLeaf.view; 
 			if (!(view instanceof MarkdownView)) return;		// not markdown view
 
-			const oldFile = this.viewFileMap.get(view);
-			if (oldFile === file) return;						// same file
+			const oldToc = this.viewTocMap.get(view);
+			if (oldToc && oldToc.file === file) return;			// same file
+
 
 			// file is changed
-
 			// remove old toc 
-			// TODO: split markdown view??
-			if (oldFile) {  
-				const oldToc = this.fileTocMap.get(oldFile);
-				oldToc.unmount();
-				this.fileTocMap.delete(oldFile);
-				this.viewFileMap.delete(view);
-				// console.log("file-close:",oldFile.path);
-			}
+			this.removeTocViewOfMarkdownView(view);
 
 			// create new toc
 			if (this.app.metadataCache.getFileCache(file)?.frontmatter?.["float-toc"] === false) return; // dont display
@@ -239,24 +248,16 @@ export default class FloatTocPlugin extends Plugin {
 				}
 			}
 			
-			const tocView = new TocView(this,view,file);
-			tocView.updateTree();
-			tocView.mount();
-
-			// console.log("file-open:",file.path);
-			this.fileTocMap.set(file,tocView);
-			this.viewFileMap.set(view,file);
+			this.addNewTocViewToMarkdownView(view,file);
 		});
 
 		const eventRefCacheChanged = this.app.metadataCache.on("changed",(file,data,cache) => {
-			const tocView = this.fileTocMap.get(file);
-			if (!tocView) return;
+			const tocViews = this.fileTocMap.get(file);
+			if (!tocViews || tocViews.length === 0) return;
 
-			if (cache?.frontmatter?.["float-toc"] === false) {
-				tocView.unmount();
-			} else {
-				tocView.updateTree();
-			}
+			tocViews.forEach((t) => {
+				t.updateTree();
+			})
 		})
 
 		this.register(() => {
@@ -266,9 +267,10 @@ export default class FloatTocPlugin extends Plugin {
 	}
 
 	onunload() {
-		this.fileTocMap.forEach((v) => {
-			v.unmount();
-		});
+
+		for (const view of this.viewTocMap.keys()) {
+			this.removeTocViewOfMarkdownView(view);
+		}
 	}
 
 
@@ -283,6 +285,14 @@ export default class FloatTocPlugin extends Plugin {
 }
 
 
+
+interface FloatTocSetting {
+	excludePaths: Array<string>
+}
+
+const DEFAULT_SETTINGS: FloatTocSetting = {
+	excludePaths: []
+}
 class FloatTocSettingTab extends PluginSettingTab {
 	plugin: FloatTocPlugin;
 
