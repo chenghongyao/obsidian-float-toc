@@ -266,9 +266,9 @@ export default class FloatTocPlugin extends Plugin {
 	}
 
 	onunload() {
-		// this.fileTocMap.forEach((v) => {
-		// 	v.unmount();
-		// });
+		this.fileTocMap.forEach((v) => {
+			v.unmount();
+		});
 	}
 
 
