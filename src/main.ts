@@ -1,8 +1,9 @@
-import {Plugin,MarkdownView, TFile, Modal, App, Notice, WorkspaceLeaf, ViewState, View, HeadingCache, Setting, PluginSettingTab} from "obsidian";
+import {Plugin,MarkdownView, TFile, Modal, App, Notice, WorkspaceLeaf, ViewState, View, HeadingCache, Setting, PluginSettingTab, Menu} from "obsidian";
 
 import Vue from "Vue";
 import vHeadingTree from "./components/v-heading-tree.vue"
 
+import {around} from 'monkey-around'
 
 class HeadingTree {
 	level: number;
@@ -82,9 +83,8 @@ class TocView {
 		this.container.addClass("markdown-toc-view");
 		this.container.setAttr("data-file",this.file.path);
 
-
 		const self = this;
-		new Vue({
+		const vueApp = new Vue({
 			el: this.container.createDiv(),
 			render: (h:any) => h('v-heading-tree', {
 				attrs: {
@@ -94,9 +94,30 @@ class TocView {
 					'select-heading': function(node: HeadingTree) {
 						self.view.setEphemeralState({ line:node.line })
 					},
-					'close': function() {
-						self.plugin.fileTocMap.delete(self.file);
-						self.unmount();
+					'setting': function(ev: MouseEvent) {
+						const menu = new Menu(self.plugin.app);
+						menu.addItem((item) => {
+							item
+								.setTitle("关闭")
+								.setIcon("cross")
+								.onClick(() => {
+									self.plugin.fileTocMap.delete(self.file);
+									self.unmount();
+								})
+						});
+
+
+						// menu.addItem((item) => {
+						// 	item
+						// 		.setTitle("自动编号")
+						// 		.setIcon("list")
+						// 		.onClick(() => {
+						// 			self.plugin.fileTocMap.delete(self.file);
+						// 			self.unmount();
+						// 		})
+						// });
+
+						menu.showAtMouseEvent(ev);
 					}
 				},
 				ref: "tree",
@@ -105,6 +126,8 @@ class TocView {
 				vHeadingTree,
 			}
 		});
+
+		// console.log(vueApp);
 	}
 
 	updateTree() {
@@ -140,48 +163,92 @@ const DEFAULT_SETTINGS: FloatTocSetting = {
 export default class FloatTocPlugin extends Plugin {
 
 	fileTocMap: Map<TFile,TocView> = new Map();
+	viewFileMap: Map<View,TFile> = new Map();
+
 	settings: FloatTocSetting;
 
 	async onload() {
 		await this.loadSettings();
 		this.addSettingTab(new FloatTocSettingTab(this.app, this));
 
+
+		const self = this;
+
+
+		// TODO: do we have file-close event??
+		this.register(around(WorkspaceLeaf.prototype,{
+			detach(next) {
+				return function() {
+					const oldView = this.view;
+					if (oldView instanceof MarkdownView) { // old markdown file is close!!
+						const oldFile = self.viewFileMap.get(oldView);
+						if (oldFile) {
+							self.fileTocMap.delete(oldFile);
+							self.viewFileMap.delete(oldView);
+							// console.log("file-close",oldFile.path);
+						}
+					}
+					return next.apply(this);
+				}
+			},
+			setViewState(next) {
+				return function (state: ViewState, ...rest: unknown[]) {					
+					const oldView = this.view;
+					if (oldView instanceof MarkdownView && state.type !== "markdown") { // old markdown file is close!!
+						const oldFile = self.viewFileMap.get(oldView);				// if state.type !== "markdown" then file is changed
+						if (oldFile) {
+							self.fileTocMap.delete(oldFile);
+							self.viewFileMap.delete(oldView);
+							// console.log("file-close",oldFile.path);
+						}
+					}	
+
+					return next.apply(this, [state, ...rest]);
+				};
+			}
+		}))
+
+
+		
 		const eventRefFileOpen = this.app.workspace.on('file-open', (file) => {
 			if (!file) return;
 
-			// is markdown view ??
-			const view = this.app.workspace.activeLeaf.view;
-			if (!(view instanceof MarkdownView)) return;
+			const view = this.app.workspace.activeLeaf.view; 
+			if (!(view instanceof MarkdownView)) return;		// not markdown view
 
-			// old toc ??
-			const oldTocViewEl = view.contentEl.getElementsByClassName("markdown-toc-view")?.[0]
-			const oldFilePath = oldTocViewEl?.getAttr("data-file");
-			if (oldFilePath === file.path) return;  // not new file
+			const oldFile = this.viewFileMap.get(view);
+			if (oldFile === file) return;						// same file
 
-			// remove old toc element
-			if (oldFilePath) { // close file
-				const oldFile = this.app.vault.getAbstractFileByPath(oldFilePath) as TFile;
+			// file is changed
+
+			// remove old toc 
+			// TODO: split markdown view??
+			if (oldFile) {  
 				const oldToc = this.fileTocMap.get(oldFile);
 				oldToc.unmount();
 				this.fileTocMap.delete(oldFile);
+				this.viewFileMap.delete(view);
+				// console.log("file-close:",oldFile.path);
 			}
 
-			// create new one
-			// dont display
-			if (this.app.metadataCache.getFileCache(file)?.frontmatter?.["float-toc"] === false) return;
-			for (var i = 0; i < this.settings.excludePaths.length; i++) {
-				if (file.path.startsWith(this.settings.excludePaths[i])) return;
+			// create new toc
+			if (this.app.metadataCache.getFileCache(file)?.frontmatter?.["float-toc"] === false) return; // dont display
+			if (this.app.metadataCache.getFileCache(file)?.frontmatter?.["float-toc"] !== true) {
+				for (var i = 0; i < this.settings.excludePaths.length; i++) {
+					if (file.path.startsWith(this.settings.excludePaths[i])) return;
+				}
 			}
-		
+			
 			const tocView = new TocView(this,view,file);
-			this.fileTocMap.set(file,tocView);
-
 			tocView.updateTree();
 			tocView.mount();
-			
+
+			// console.log("file-open:",file.path);
+			this.fileTocMap.set(file,tocView);
+			this.viewFileMap.set(view,file);
 		});
 
-		const eventRefCacheChanged = this.app.metadataCache.on("changed",(file, data,cache) => {
+		const eventRefCacheChanged = this.app.metadataCache.on("changed",(file,data,cache) => {
 			const tocView = this.fileTocMap.get(file);
 			if (!tocView) return;
 

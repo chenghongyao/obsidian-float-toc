@@ -1,6 +1,7 @@
 <template>
     <div v-if="tree.children.length" class="toc-folder" :class="{'is-collapsed':!isOpen}" :style="{'--heading-level': tree.level}">
         <div class="toc-folder-title"
+            :title="tree.title"
             @click="onSelectHeading"
         >
             <!-- <div class="toc-folder-collapse-indicator"></div> -->
@@ -20,6 +21,7 @@
     <div v-else class="toc-heading" :style="{'--heading-level': tree.level}">
         <div class="toc-heading-title"
             @click="onSelectHeading"
+            :title="tree.title"
         >
             <div class="toc-heading-title-content">
                 {{tree.title}}

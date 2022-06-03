@@ -8,6 +8,8 @@
 .toc-view-container {
     width: 200px;
     background-color: rgba(10, 10, 10, 0.5);
+    font-size: 11pt;
+
 }
 
 .toc-tool-container {
@@ -43,14 +45,26 @@
 .toc-folder-title
 {
     border-left: 3px solid rgb(159, 158, 158);
-    padding-left: calc(var(--heading-level)*12px - 7px);
+    padding-left: calc(var(--heading-level)*1em - 0.5em);
+
 }
+
+
 
 .toc-heading-title:hover,
 .toc-folder-title:hover
 {
     border-color:#778ba8;
     background-color: #5B6A81;
+}
+
+/* .toc-view-container.ellipsis-title */
+.toc-heading-title-content,
+.toc-folder-title-content
+{
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
 }
 
 /* .toc-heading-title-content::before,
