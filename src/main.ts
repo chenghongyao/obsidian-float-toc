@@ -66,12 +66,12 @@ class TocView {
 	headingTree: HeadingTree;
 	plugin: FloatTocPlugin;
 
-	constructor(plugin: FloatTocPlugin, view: MarkdownView,file: TFile) {
+	constructor(plugin: FloatTocPlugin, view: MarkdownView,file: TFile, tree: HeadingTree) {
 		this.plugin = plugin
 		this.file = file;
 		this.view = view;
+		this.headingTree = tree;
 
-		this.headingTree = new HeadingTree(0,0,"root");
 		this.createTocTree();
 	}
 
@@ -128,15 +128,7 @@ class TocView {
 		// console.log(vueApp);
 	}
 
-	updateTree() {
-		const headings = this.plugin.app.metadataCache.getFileCache(this.file).headings || [];
 
-		var minLevel = 999;
-		headings.map((h) => {minLevel = h.level < minLevel ? h.level : minLevel});
-
-		this.headingTree.clear();
-		buildHeadingTree(headings,0,this.headingTree,true, minLevel === 999 ? 0 : minLevel - 1);
-	}
 
 	mount() {
 		this.view.contentEl.appendChild(this.container);
@@ -159,22 +151,37 @@ class TocView {
 export default class FloatTocPlugin extends Plugin {
 
 	fileTocMap: Map<TFile,Array<TocView>> = new Map();
+	fileTreeMap: Map<TFile,HeadingTree> = new Map();
 	viewTocMap: Map<MarkdownView,TocView> = new Map();
 
 	settings: FloatTocSetting;
 
-	private addNewTocViewToMarkdownView(view: MarkdownView, file: TFile) {
-		const tocView = new TocView(this,view,file);
-		tocView.updateTree();
-		tocView.mount();
 
-		var tocViews = this.fileTocMap.get(file)
-		if (!tocViews) {
-			tocViews = new Array<TocView>()
-			this.fileTocMap.set(file,tocViews);
+	private updateTree(file: TFile, tree: HeadingTree) {
+		const headings = this.app.metadataCache.getFileCache(file).headings || [];
+	
+		var minLevel = 999;
+		headings.map((h:HeadingCache) => {minLevel = h.level < minLevel ? h.level : minLevel});
+	
+		tree.clear();
+		buildHeadingTree(headings,0,tree,true, minLevel === 999 ? 0 : minLevel - 1);
+	}
+	
+	private addNewTocViewToMarkdownView(view: MarkdownView, file: TFile) {
+
+		var tree = this.fileTreeMap.get(file);
+		if (!tree) {
+			tree = new HeadingTree(0,0,"root");
+			this.updateTree(file,tree);
+
+			this.fileTreeMap.set(file,tree);
+			this.fileTocMap.set(file,new Array<TocView>());
 		}
 
-		tocViews.push(tocView);
+		const tocView = new TocView(this,view,file,tree);
+		tocView.mount();
+
+		this.fileTocMap.get(file).push(tocView);
 		this.viewTocMap.set(view,tocView);
 	}
 
@@ -186,6 +193,7 @@ export default class FloatTocPlugin extends Plugin {
 			tocViews.remove(tocView);
 			if (tocViews.length === 0) {
 				this.fileTocMap.delete(tocView.file);
+				this.fileTreeMap.delete(tocView.file);
 			}
 			this.viewTocMap.delete(view);
 		}
@@ -255,9 +263,7 @@ export default class FloatTocPlugin extends Plugin {
 			const tocViews = this.fileTocMap.get(file);
 			if (!tocViews || tocViews.length === 0) return;
 
-			tocViews.forEach((t) => {
-				t.updateTree();
-			})
+			this.updateTree(file,this.fileTreeMap.get(file));
 		})
 
 		this.register(() => {
